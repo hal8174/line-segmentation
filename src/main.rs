@@ -1,14 +1,22 @@
 use anyhow::Result;
 use clap::Parser;
-use image::{io::Reader as ImageReader, GrayImage, ImageBuffer, Luma, RgbImage};
+use image::{io::Reader as ImageReader, GrayImage, ImageBuffer, Luma, RgbImage, SubImage};
 use std::path::PathBuf;
 
+/// A utility for extracting individual lines of text from an image
 #[derive(Parser)]
 struct Args {
+    /// Path of the image
     image: PathBuf,
-    percentile: f64,
-    percent_above: f64,
-    percent_below: f64,
+    /// Float between 0 and 1 specifying the percentile of brightness values used to separate 'black' and 'white' lines
+    #[arg(short,long,default_value_t = 0.3)]
+    cutoff: f64,
+    /// Float between 0 and 1 specifying the percentage of 'white' lines **before** the text line to be included in the extract.
+    #[arg(short,long,default_value_t = 0.7)]
+    above: f64,
+    /// Float between 0 and 1 specifying the percentage of 'white' lines **after** the text line to be included in the extract.
+    #[arg(short,long,default_value_t = 0.6)]
+    below: f64,
 }
 
 fn draw_rows(rows: Vec<f64>, path: &str) -> Result<()> {
@@ -27,15 +35,10 @@ fn draw_rows(rows: Vec<f64>, path: &str) -> Result<()> {
 }
 
 fn extract(i: u32, start: u32, end: u32, img: &RgbImage) -> Result<()> {
-    let mut extract: RgbImage = ImageBuffer::new(img.width(), end - start);
 
-    for y in 0..extract.height() {
-        for x in 0..extract.width() {
-            *extract.get_pixel_mut(x, y) = img.get_pixel(x, start + y).clone();
-        }
-    }
+    let subimg = SubImage::new(img, 0, start, img.width(), end - start);
 
-    extract.save(format!("out/{:02}.png", i))?;
+    subimg.to_image().save(format!("out/{:02}.png", i))?;
 
     Ok(())
 }
@@ -61,7 +64,7 @@ fn main() -> Result<()> {
 
     let mut rows_med = rows.clone();
     rows_med.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let median = rows_med[(rows_med.len() as f64 * args.percentile) as usize];
+    let median = rows_med[(rows_med.len() as f64 * args.cutoff) as usize];
 
     let mut img_view = ImageReader::open(args.image)?.decode()?.to_luma8();
 
@@ -77,6 +80,8 @@ fn main() -> Result<()> {
         }
     }
 
+    std::fs::create_dir_all("out")?;
+
     let mut white = true;
     let mut blocks = Vec::new();
     let mut start = 0;
@@ -90,24 +95,24 @@ fn main() -> Result<()> {
         }
     }
 
-    let start = blocks[0].0 as u32 - ((blocks[0].0 - 0) as f64 * args.percent_above) as u32;
-    let end = blocks[0].1 as u32 + ((blocks[1].0 - blocks[0].1) as f64 * args.percent_below) as u32;
+    let start = blocks[0].0 as u32 - ((blocks[0].0 - 0) as f64 * args.above) as u32;
+    let end = blocks[0].1 as u32 + ((blocks[1].0 - blocks[0].1) as f64 * args.below) as u32;
     extract(0, start, end, &img)?;
 
     for i in 1..blocks.len() - 1 {
         let start = blocks[i].0 as u32
-            - ((blocks[i].0 - blocks[i - 1].1) as f64 * args.percent_above) as u32;
+            - ((blocks[i].0 - blocks[i - 1].1) as f64 * args.above) as u32;
         let end = blocks[i].1 as u32
-            + ((blocks[i + 1].0 - blocks[i].1) as f64 * args.percent_below) as u32;
+            + ((blocks[i + 1].0 - blocks[i].1) as f64 * args.below) as u32;
 
         extract(i as u32, start, end, &img)?;
     }
 
     let i = blocks.len() - 1;
     let start =
-        blocks[i].0 as u32 - ((blocks[i].0 - blocks[i - 1].1) as f64 * args.percent_above) as u32;
+        blocks[i].0 as u32 - ((blocks[i].0 - blocks[i - 1].1) as f64 * args.above) as u32;
     let end = blocks[i].1 as u32
-        + ((img.height() as usize - blocks[i].1) as f64 * args.percent_below) as u32;
+        + ((img.height() as usize - blocks[i].1) as f64 * args.below) as u32;
     extract(i as u32, start, end, &img)?;
 
     img_view.save("view.png")?;
